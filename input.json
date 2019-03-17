@@ -1,0 +1,29 @@
+{
+  "required": {
+
+    "crashes": {
+        "start" : 3,
+        "end"   : 3
+    }
+
+  },
+
+  "advanced": {
+      "median_filter_window_size"   : 9,
+      "close_plots"                 : 1,
+      "time_smooth_for_rinv"        : 500,
+      "window_filtration_function"  : "triang",
+      "channels": {
+          "start" : 1,
+          "end"   : 96
+      }
+  },
+
+  "modules": {
+    "q_profile": {
+      "center"      : 2.9584,
+      "alpha"       : 0.127
+    }
+  }
+
+}
