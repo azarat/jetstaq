@@ -84,7 +84,7 @@ class QProfileModuleClass:
         xs = self.find_xs_ppf(temperature_pre_post, channel_position)
         xs_index_order = self.nearest_channel_index(xs, channel_position, channel_index)
 
-        integral = self.integrate_eiler(xs, xs_index_order, channel_position, temperature_pre_post, inv_radius, xc_index_order)
+        integral = self.integrate_eiler_linear_aprox(xs, xs_index_order, channel_position, temperature_pre_post, inv_radius, xc_index_order)
 
         x_mix = integral["x_2"][-1]
         # x_mix = 2.2
@@ -285,20 +285,118 @@ class QProfileModuleClass:
         ----------------------------------------- """
 
         """ With electron density """
-        alpha = self.input_parameters['alpha']
-        return_f = -1 * ((1 - alpha * x_1) / (1 - alpha * x_2)) * ((temperature_1 - temperature_plus) / (temperature_plus - temperature_2))
+        # alpha = self.input_parameters['alpha']
+        # return_f = -1 * ((1 - alpha * x_1) / (1 - alpha * x_2)) * ((temperature_1 - temperature_plus) / (temperature_plus - temperature_2))
 
         """ Without electron density """
-        # return_f = -1 * (temperature_1 - temperature_plus) / (temperature_plus - temperature_2)
+        return_f = -1 * (temperature_1 - temperature_plus) / (temperature_plus - temperature_2)
 
         return return_f
 
-    def integrate_eiler(self, xs, xs_index_order, channel_position, temperature_pre_post, inv_radius, xc):
+    def integrate_eiler(self, xs, channel_position, temperature_pre_post):
         """ -----------------------------------------
             version: 1.1
         ----------------------------------------- """
 
         n_steps = 100
+        integration_boundaries = np.linspace(xs, 0, n_steps)
+
+        y = 0
+        function_value = 0
+        x_1 = []
+        f = []
+        T_1 = []
+        T_2 = []
+        T_plus = []
+        x_plus = []
+        x_2 = []
+        for i, inter_position in enumerate(integration_boundaries):
+
+            if i == 0:
+                y = xs
+                function_value = -1
+            else:
+
+                h = (inter_position - integration_boundaries[i-1])
+                y = y + h * function_value
+
+                temperature_1 = self.temperature_interpolation(inter_position, channel_position, temperature_pre_post['pre'])
+                temperature_2 = self.temperature_interpolation(y, channel_position, temperature_pre_post['pre'])
+                temperature_plus = self.temperature_interpolation((y - inter_position), channel_position, temperature_pre_post['post'])
+
+                """ Temperature correction due to the overlapping T1/2 and T+ """
+                temperature_xs = self.temperature_interpolation(xs, channel_position, temperature_pre_post['pre'])
+                diff_Txs_Tx2 = np.abs(temperature_xs - temperature_2)
+                diff_Txs_Txplus = np.abs(temperature_xs - temperature_plus)
+
+                """ NEED TO BE TESTED """
+                if (diff_Txs_Txplus / diff_Txs_Tx2) > 0.4:
+                    temperature_plus = (diff_Txs_Tx2 / 1.5) + temperature_2
+                """ NEED TO BE TESTED """
+
+                function_value = self.integration_function(temperature_plus, temperature_1, temperature_2, inter_position, y)
+
+                debug_density = self.debug_density(inter_position, y)
+
+                if np.isnan(inter_position) or np.isnan(y - inter_position) or np.isnan(y) \
+                        or np.isnan(temperature_1) or np.isnan(temperature_2) or np.isnan(temperature_plus) \
+                        or debug_density < 0 or (len(x_2) > 0 and y < x_2[-1]):
+                    break
+
+                x_2.append(y)
+                x_plus.append(y - inter_position)
+                x_1.append(inter_position)
+                f.append(function_value)
+                T_1.append(temperature_1)
+                T_2.append(temperature_2)
+                T_plus.append(temperature_plus)
+
+        return {
+            "f": f,
+            "x_2": x_2
+        }
+
+    def linearization(self, temperature, xs, channel_position):
+
+        temperature_xc = self.temperature_interpolation(0, channel_position, temperature)
+        temperature_xs = self.temperature_interpolation(xs, channel_position, temperature)
+
+        # Linear extrapolation
+        temperature_xlast = temperature_xc + ((channel_position[-1] - 0) / (xs - 0)) * (temperature_xs - temperature_xc)
+
+        temperature_linear = np.linspace(temperature_xc, temperature_xlast, len(temperature))
+        position_linear = np.linspace(channel_position[0], channel_position[-1], len(temperature))
+
+        temperature_reconstructed = []
+        for p in channel_position:
+            temperature_reconstructed.append(self.temperature_interpolation(p, position_linear, temperature_linear))
+
+        temperature_xs = self.temperature_interpolation(xs, channel_position, temperature_reconstructed)
+
+        return temperature_reconstructed
+
+    def integrate_eiler_linear_aprox(self, xs, xs_index_order, channel_position, temperature_pre_post, inv_radius, xc):
+        """ -----------------------------------------
+            version: 1.2
+        ----------------------------------------- """
+
+        temperature_pre_post_post = temperature_pre_post['post']
+
+        channel_position_cut = []
+        for p in channel_position:
+            if p > 0:
+                channel_position_cut.append(p)
+
+        channel_position = channel_position_cut
+
+        cut_negative = len(temperature_pre_post['pre']) - len(channel_position)
+        temperature_pre_post['pre'] = temperature_pre_post['pre'][cut_negative:]
+        temperature_pre_post['post'] = temperature_pre_post['post'][cut_negative:]
+        temperature_pre_post_post = temperature_pre_post_post[cut_negative:]
+
+        temperature_pre_post['post'] = self.linearization(temperature_pre_post['post'], xs-1, channel_position)
+
+        n_steps = 1000
         integration_boundaries = np.linspace(xs, 0, n_steps)
 
         y = 0
@@ -348,22 +446,22 @@ class QProfileModuleClass:
                 debug_density = self.debug_density(inter_position, y)
                 debug_interfunc = self.debug_interfunc(temperature_1, temperature_2, temperature_plus)
 
-                """ DEBUG """
-                print("-------------------------STEP ", i)
-                print("x1 = ", inter_position, " --- xs = ", xs, " --- y = ", y, " --- x+ = ", (y - inter_position))
-                if len(x_2) > 0:
-                    print("-------------------------")
-                    print("x2_step = ", y-x_2[-1])
-                print("-------------------------")
-                print("diff_Txs_Txplus / diff_Txs_Tx2 = ", diff_Txs_Txplus / diff_Txs_Tx2)
-                diff_Txs_Tx2 = np.abs(temperature_xs - temperature_2)
-                diff_Txs_Txplus = np.abs(temperature_xs - temperature_plus)
-                print("diff_Txs_Txplus / diff_Txs_Tx2 = ", diff_Txs_Txplus / diff_Txs_Tx2)
-                print("-------------------------")
-                print("T1 = ", temperature_1, " --- T2 = ", temperature_2, " --- T+ = ", temperature_plus)
-                print("-------------------------")
-                print("f = ", function_value)
-                print("-------------------------")
+                # """ DEBUG """
+                # print("-------------------------STEP ", i)
+                # print("x1 = ", inter_position, " --- xs = ", xs, " --- y = ", y, " --- x+ = ", (y - inter_position))
+                # if len(x_2) > 0:
+                #     print("-------------------------")
+                #     print("x2_step = ", y-x_2[-1])
+                # print("-------------------------")
+                # print("diff_Txs_Txplus / diff_Txs_Tx2 = ", diff_Txs_Txplus / diff_Txs_Tx2)
+                # diff_Txs_Tx2 = np.abs(temperature_xs - temperature_2)
+                # diff_Txs_Txplus = np.abs(temperature_xs - temperature_plus)
+                # print("diff_Txs_Txplus / diff_Txs_Tx2 = ", diff_Txs_Txplus / diff_Txs_Tx2)
+                # print("-------------------------")
+                # print("T1 = ", temperature_1, " --- T2 = ", temperature_2, " --- T+ = ", temperature_plus)
+                # print("-------------------------")
+                # print("f = ", function_value)
+                # print("-------------------------")
 
                 if np.isnan(inter_position) or np.isnan(y - inter_position) or np.isnan(y) \
                         or np.isnan(temperature_1) or np.isnan(temperature_2) or np.isnan(temperature_plus) \
@@ -392,8 +490,8 @@ class QProfileModuleClass:
         # # tests = [(1 - (0.6 * x)) for x in xm]
         #
         # plt.close('all')
-        # fig, ax = plt.subplots(1, 1)
-        # fig.set_size_inches(15, 7)
+        # # fig, ax = plt.subplots(1, 1)
+        # # fig.set_size_inches(15, 7)
         # # ax.plot(x_1)
         # # ax.plot(x_2)
         # # ax.plot(x_plus)
@@ -407,22 +505,33 @@ class QProfileModuleClass:
         # # ax.plot(debug_density_array)
         # # ax.plot(return_f_1)
         # # ax.plot(return_f_2)
+        # # ax.plot(channel_position, temperature_pre_post['post'])
         #
-        # ax.set(xlabel='(r/a)^2', ylabel='T', title="")
+        # fig, ax = plt.subplots(1, 1)
+        # fig.set_size_inches(15, 7)
+        #
+        # ax.set(xlabel='X', ylabel='T', title="Discharge: 86459")
         # ax.plot(channel_position, temperature_pre_post['pre'], "--")
         # ax.plot(channel_position, temperature_pre_post['post'], "--")
-        # ax.axvline(x=channel_position[xc['order']], color="black")
+        # ax.plot(channel_position, temperature_pre_post_post, "--")
+        #
+        # # ax.axvline(x=channel_position[xc['order']], color="black")
         # ax.axvline(x=xs, color="black")
+        # ax.axhline(y=temperature_pre_post['post'][cut_negative], color="black")
         # # ax.axvline(x=channel_position[inv_radius['sorted_order']], color="black")
         # ax.axvline(x=x_2[-1], color="red")
         # ax.axvline(x=x_1[-1], color="red")
-        # ax.axvline(x=x_plus[-1], color="orange")
-        # ax.axhline(y=T_plus[-1], color="orange")
-        # ax.legend(["T pre", "T post", "Center", "Xs", "Integration iterator", "Integration iterator", "X+", "T+"])
+        # # ax.axvline(x=x_plus[-1], color="orange")
+        # # ax.axhline(y=T_plus[-1], color="orange")
+        # # ax.legend(["T pre", "T post", "Xs", "T(Xs)", "X2"])
+        #
+        # for item in ([ax.title, ax.xaxis.label, ax.yaxis.label] +
+        #              ax.get_xticklabels() + ax.get_yticklabels()):
+        #     item.set_fontsize(17)
         #
         # plt.show()
         # exit()
-        # f = signal_processor.medfilt(f, 11)
+        # # f = signal_processor.medfilt(f, 11)
 
         return {
             "f": f,
@@ -448,12 +557,12 @@ class QProfileModuleClass:
 
         """ Find interposition via triangular equations """
         """ Katet """
-        b = self.channel_position[right_channel_order] - self.channel_position[left_channel_order]
+        b = psi_r[right_channel_order] - psi_r[left_channel_order]
         """ Part of the same katet """
-        b1 = r_mix - self.channel_position[left_channel_order]
+        b1 = r_mix - psi_r[left_channel_order]
         """ Another katet """
 
-        a = psi_r[right_channel_order] - psi_r[left_channel_order]
+        a = psi[right_channel_order] - psi[left_channel_order]
         """ Hypotenuza """
         c = np.sqrt(np.power(a, 2) + np.power(b, 2))
         """ Triangular part of psi we looking for """
@@ -504,17 +613,6 @@ class QProfileModuleClass:
             q_rmix = q_database[left_channel_order] + a1
         else:
             q_rmix = q_database[left_channel_order] - a1
-
-        # """ DEBUG """
-        # print(q_rmix)
-        # plt.close('all')
-        # fig, ax = plt.subplots(1, 1)
-        # fig.set_size_inches(15, 7)
-        # ax.set(xlabel='PSI', ylabel='QPRE', title="QPROFILE")
-        # ax.plot(psi_database, q_database)
-        #
-        # plt.show()
-        # exit()
 
         return q_rmix
 

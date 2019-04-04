@@ -29,7 +29,7 @@ class ViewData:
     close_plots = 1
 
     def __init__(self):
-        print("--------------------------------------VERSION: 0.10")
+        print("--------------------------------------VERSION: 1.1")
 
         self.input_parameters = self.read_input_parameters()
 
@@ -154,23 +154,18 @@ class ViewData:
             psi_xs = q_profile.get_psi_rmix(self.surfaces_ro, self.surfaces_psinorm, r_s)
             psi_rmix = q_profile.get_psi_rmix(self.surfaces_ro, self.surfaces_psinorm, r_mix)
 
-            """ Transform PSI_norm to PSI_toroidal === x """
-            # IN DEV =(
-
             """ Find Q in defined PSI positions """
-            # q_rmix = q_profile.get_q_rmix(psi_rmix, self.q_database, self.q_x_database)
             q_rmix = q_profile.get_q_rmix(psi_rmix, self.q_database, self.surfaces_psinorm)
-            q_center = q_rmix / qmix_to_qcenter
+            q_center = 1 / (((-1 * qmix_to_qcenter) / q_rmix) + qmix_to_qcenter + 1)
 
             """ DEBUG """
-            from scipy.interpolate import interp1d
+            fig, ax = plt.subplots(1, 1)
+            fig.set_size_inches(15, 7)
+            plt.close('all')
+            ax.plot(self.surfaces_psinorm, self.q_database)
 
-            plt.close('all')
-            x = [0, psi_xs, psi_rmix, self.q_x_database[-1]]
+            x = [0, psi_xs, psi_rmix, self.surfaces_psinorm[-1]]
             y = [q_center, 1, q_rmix, self.q_database[-1]]
-            f2 = interp1d(x, y, kind='cubic')
-            xnew = np.linspace(0, self.q_x_database[-1], num=41)
-            plt.close('all')
             fig, ax = plt.subplots(1, 1)
             fig.set_size_inches(15, 7)
             ax.set(xlabel='PSI', ylabel='Q', title="QPROFILE, Discharge: " + str(self.shots[dis]) +
@@ -178,10 +173,10 @@ class ViewData:
                                                    " \n Center: " +
                                                    str(self.input_parameters['modules']['q_profile']['center']) +
                                                    "m, R_inv: " + str(inv_radius['position']) +
-                                                   "m, Alpha: " + str(self.input_parameters['modules']['q_profile']['alpha']))
+                                                   "m, Alpha: " + str(self.input_parameters['modules']['q_profile']['alpha']) +
+                                                   ", Q_center: " + str('{:.4f}'.format(y[0])))
+            ax.grid()
             ax.plot(x, y, 'o', x, y, '-')
-            ax.plot(xnew, f2(xnew), '--')
-            ax.legend(['data', 'linear', 'cubic'], loc='best')
 
             directory = 'results/modules/q_profile/'
 
@@ -192,8 +187,8 @@ class ViewData:
                         '_crash' + str(dis + 1) +
                         '.png')
             plt.show()
-            exit()
             print("------End module: Q profile------")
+            exit()
             """ ------!IN DEV! """
 
             result = [self.shots[dis],
